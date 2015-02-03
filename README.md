@@ -19,6 +19,41 @@ default for most Python installations).
 
 Read http://www.rrn.dk/the-difference-between-utf-8-and-unicode
 
+## Imports
+Your new tag, however, is going to get an argument like coltrane.link or coltrane.
+entry, so you will need to import the correct model class dynamically.
+Python provides a way to do this through a special built-in function named `__import__()`,
+which takes strings as arguments. But loading a model class dynamically is a common enough
+need that Django provides a helper function to handle it more concisely. This function is
+`django.db.models.get_model()`, and it takes two arguments:
+
+- The name of the application the model is defined in, as a string
+- The name of the model class, as a string
+
+## Classes
+So you can start by writing its constructor (remember that a Python object’s constructor is
+always called `__init__()`) and simply storing those arguments as instance variables:
+
+    class LatestContentNode(template.Node):
+        def __init__(self, model, num, varname):
+        self.model = model
+        self.num = int(num)
+        self.varname = varname
+
+## Functions & Methods
+
+the asterisk (`*`) is special Python syntax for taking a list (the result of calling split()) and turning in a set of arguments to a function
+
+this
+
+    model_args = bits[1].split('.')
+    model = get_model(*model_args)
+
+is equal to
+
+    model_args = bits[1].split('.')
+    model = get_model(model_args[0], model_args[1])
+
 ## Models
 
 ### blank and null
@@ -165,3 +200,72 @@ then in the model:
     objects = models.Manager()
 
 When a model has a custom manager, Django doesn’t automatically set up the objects manager for you.
+
+The first manager defined in a model class is given special status. It becomes the default manager for that model, in addition to the name it was defined with. It will also be available as the attribute `_default_` manager, so you can actually write this as:
+
+    def render(self, context):
+        context[self.varname] = self.model._default_manager.all()[:self.num]
+        return ''
+
+## Templates
+
+### how they work
+Before you can dive into writing your own custom extensions to Django’s template system, you
+need to understand the actual mechanism behind it. Knowing how things work “under the
+hood” makes the process of writing custom template functionality much simpler.
+The process Django goes through when loading a template works—roughly—like this:
+- Read the actual template contents: Most often this means reading out of a template file on disk, but that’s not always the case. Django can work with anything that hands over a string containing the contents you want it to treat as a template.
+- Parse through the template, looking for tags and variables: Each tag in the template, including all of Django’s built-in tags, will correspond to a particular Python function defined somewhere (inside django/template/defaulttags.py in the case of the built-in tags). You’ll see in a moment how to tell Django that a particular tag maps to a par- ticular function. Typically this function is referred to as the tag’s compilation function because it’s called while Django is compiling a list of the eventual template contents.
+- For each tag, call the appropriate function, passing in two arguments: One argument is the parsing class that is reading the template (useful for doing tricky things with the way the template gets processed), and the other is a string containing the contents of the tag. So, for example, the tag {% if foo %} results in Django passing a function (called do_if(), in Django’s default tag library) an instance of the parsing class and an object that holds the tag contents “if foo.”
+- Make a note of the return value of the Python function called for each tag: Each func- tion is required to return an instance of a special class—django.template.Node—or a subclass of it, and choosing an appropriate Node subclass based on the particular tag. 
+
+The result is an instance of the class django.template.Template, which contains a list of
+Node instances (or instances of Node subclasses). This is the actual “thing” that will be rendered
+to produce the output. Each Node is required to have a method named render(), which accepts
+a copy of the current template context (the dictionary of variables available to the template) and
+returns a string. The output of the template comes from concatenating those strings together.
+
+### inheritance
+within a block, you’ll have access to the content that
+would have gone there if you weren’t supplying your own. This content is stored in a special
+variable named `block.super`. So if you had a base template that contained this:
+
+    {% block title %}My weblog:{% endblock %}
+
+you could write a template that extended it, and fill in your own content:
+
+    {% block title %}My page{% endblock %}
+
+Using block.super, you could access the default content from the parent block to get a
+final value of My weblog: My page:
+
+    {% block title %}{{ block.super }} My page{% endblock %}
+
+### 3 layered structure
+- single base template containing the common HTML of all pages.
+- Section-specific base templates that fill in appropriate navigation and/or theming. These extend the base template.
+- The “actual” templates that will be loaded and rendered by the views. These extend the appropriate section-specific templates.
+
+### tips
+
+    <body class="{% block bodyclass %}{% endblock %}">
+
+A common technique in CSS-based web design is to use a class attribute on the body tag
+to trigger changes to a page’s style. For example, you’ll have a list of navigation options in the
+sidebar, representing different parts of the blog—entries, links, and so forth—and it would be
+nice to highlight the part a visitor is currently looking at. By changing the class of the body tag
+in different parts of the site, you can easily use CSS to highlight the correct item in the navigation list.
+
+### filters
+
+#### pluralize
+
+    <p>This entry is part of the
+    categor{{ object.categories.count|pluralize:"y,ies" }}
+
+#### timesince
+
+    <li>
+        <a href="{{ entry.get_absolute_url }}">{{ entry.title }}</a>,
+        posted {{ entry.pub_date|timesince }} ago.
+    </li>
