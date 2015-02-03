@@ -1,6 +1,6 @@
 # Practical Django Projects
 
-Just some extracts from the "Practcal Django Projects" book which capture my attention
+Just some extracts from the "Practical Django Projects" book which capture my attention
 
 ## Models
 
@@ -60,3 +60,24 @@ see http://axiacore.com/blog/how-use-genericforeignkey-django/
 - The `save()` method, if it’s being overridden
 - The `get_absolute_url()` method, if present
 - Any additional custom methods
+
+### permalink
+The permalink decorator you’re using here (which lives in django.db.models) will actually rewrite `the get_absolute_url()` function to do a reverse URL lookup. It will scan the project’s URLConf to look for the URL pattern with the specified name, then use that pattern’s regular expression to create the correct URL string and fill in the proper values for any arguments that need to be embedded in the URL.
+
+This
+
+    def get_absolute_url(self):
+        return ('coltrane_entry_detail', (), { 'year': self.pub_date.strftime("%Y"),
+            'month': self.pub_date.strftime("%b").lower(),
+            'day': self.pub_date.strftime("%d"),
+            'slug': self.slug })
+    get_absolute_url = models.permalink(get_absolute_url)
+
+is the same as this
+
+    @models.permalink
+    def get_absolute_url(self):
+        return ('coltrane_entry_detail', (), { 'year': self.pub_date.strftime("%Y"),
+            'month': self.pub_date.strftime("%b").lower(),
+            'day': self.pub_date.strftime("%d"),
+            'slug': self.slug })
