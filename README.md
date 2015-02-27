@@ -16,8 +16,19 @@ them to the Delicious API. Django provides a helper function, `django.utils.enco
 function and get away with it. However, Django’s `smart_str()` can handle some situations that
 `str()` can’t, and it also defaults to encoding the result in UTF-8 instead of ASCII (which is the
 default for most Python installations).
+Django uses Unicode strings everywhere, so whenever you use an
+external API, you should convert Unicode strings to bytestrings by using the helper function
+`django.utils.encoding.smart_str()`.
 
 Read http://www.rrn.dk/the-difference-between-utf-8-and-unicode
+
+### datetime
+
+    delta = datetime.datetime.now() - entry.pub_date
+    if delta.days > 30:
+        instance.is_public = False
+
+the delta var is an instance of a class called timedelta
 
 ## Imports
 Your new tag, however, is going to get an argument like coltrane.link or coltrane.
@@ -40,6 +51,14 @@ always called `__init__()`) and simply storing those arguments as instance varia
         self.num = int(num)
         self.varname = varname
 
+### inheritance
+So far, you’ve been writing models that are subclasses of Django’s built-in basic model
+class, but Django also supports models that subclass from other model classes. It allows you to
+use either of two common patterns when you’re doing such subclassing:
+
+- Concrete inheritance: This is what many people think of when they imagine how subclassing a model works. In this pattern, one model that subclasses another will create a new database table that links back to the original “parent” class’s table with a foreign key. Instances of the subclassed model will behave as if they have both the fields defined on the “parent” model and the fields defined on the subclassed model itself (under the hood, Django will pull information from both tables as needed).
+- Abstract inheritance: When you define a new model class and fill in its options using the inner class Meta declaration, you can add the attribute abstract=True. When you do this, Django will not create a table for that model, and you won’t be able to directly create or query for instances of that model. However, any subclasses of that model (as long as they don’t also declare abstract=True) will create their own tables, and will add columns for the fields from the abstract model as well.
+
 ## Functions & Methods
 
 the asterisk (`*`) is special Python syntax for taking a list (the result of calling split()) and turning in a set of arguments to a function
@@ -55,6 +74,10 @@ is equal to
     model = get_model(model_args[0], model_args[1])
 
 ## Models
+
+### Meta
+The `abstract` options let's you define the class is an abstract one, so no tables are created, and no instances can be created. This is useful or models inheritance.
+In other words, concrete inheritance creates one table for each model, as usual. Abstract inheritance creates only one table, the table for the subclass, and places all of the fields inside it.
 
 ### blank and null
 Also, it’s important to note that for text-based field types (CharField, TextField, and others), Django
@@ -207,6 +230,34 @@ The first manager defined in a model class is given special status. It becomes t
         context[self.varname] = self.model._default_manager.all()[:self.num]
         return ''
 
+### extending the default manager
+Create a manager.py file
+
+    from django.db import models
+    from django.contrib.auth.models import User
+    from django.db.models import Count
+
+    class SnippetManager(models.Manager):
+        def top_authors(self):
+        return User.objects.annotate(score=Count('snippet')).order_by('score')
+
+Then in the model
+
+    from myapp import managers
+
+    ...
+
+    class MyModel(models.Model):
+        ...
+        objects = managers.SnippetManager()
+
+Now inside a view
+
+    def top_authors(request):
+        return object_list(request, queryset=Snippet.objects.top_authors(),
+            template_name='cab/top_authors.html',
+            paginate_by=20)
+
 ## Templates
 
 ### how they work
@@ -256,6 +307,9 @@ sidebar, representing different parts of the blog—entries, links, and so forth
 nice to highlight the part a visitor is currently looking at. By changing the class of the body tag
 in different parts of the site, you can easily use CSS to highlight the correct item in the navigation list.
 
+### tags
+Due to the way Django’s template inheritance works, a custom tag or filter library loaded via the `{% load %}` tag will be available only in the block in which it was loaded. If you need to reuse the same tag library in a different block, you’ll need to load it again.
+
 ### filters
 
 #### pluralize
@@ -269,3 +323,23 @@ in different parts of the site, you can easily use CSS to highlight the correct 
         <a href="{{ entry.get_absolute_url }}">{{ entry.title }}</a>,
         posted {{ entry.pub_date|timesince }} ago.
     </li>
+
+## Contrib
+
+### markup
+
+To enable the filter, you’ll need to add one more entry to your `INSTALLED_APPS` setting:
+`django.contrib.markup`, which contains tools for working with common text-to-HTML translation systems (including Markdown).
+
+    {% load markup %}
+    <blockquote>{{ comment|markdown: "safe" }}</blockquote>
+
+This will apply Markdown to the comment’s contents, and will also enable Markdown’s “safe mode,” which strips any raw HTML tags out of the comment before generating the final HTML to display.
+
+## E-mail
+    MANAGERS = (('Alice Jones', 'alice@example.com'),
+        ('Bob Smith', 'bob@example.com'))
+
+In other words, it’s a tuple, or list of tuples, where each tuple contains a name and an
+e-mail address. When these are filled in, two functions in `django.core.mail—mail_admins()`
+and `mail_managers()` can be used as a shortcut to send an e-mail to those people.
