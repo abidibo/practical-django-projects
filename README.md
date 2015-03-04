@@ -258,6 +258,26 @@ Now inside a view
             template_name='cab/top_authors.html',
             paginate_by=20)
 
+## Forms
+
+### required/optional
+All of the field types built into Django’s form system are required by default and so cannot be left blank. If either of the password fields were left blank, Django would raise a ValidationError before calling the clean() method, so you wouldn’t need to raise an additional error to require a value. To mark a form field as optional, pass it the keyword argument required=False.
+
+### validation
+The form `is_valid()` method performs the following stack
+
+- `full_clean()`
+- Field `clean()`
+- Form `clean_FIELDNAME()`
+- Form `clean()`
+- errors or cleaned data
+
+1. `full_clean()` loops through the fields on the form. Each field class has a method named `clean()`, which implements that field’s built-in validation rules, and each of these methods will either raise a `ValidationError` or return a value. If a ValidationError is raised, no further validation is done for that field. If a value is returned, it goes into the form’s `cleaned_data` dictionary.
+2. If a field’s built-in clean() method didn’t raise a ValidationError, then any available custom validation method is called. Again, these methods can either raise a ValidationError or return a value; if they return a value, it goes into `cleaned_data`.
+3. Finally, the form’s `clean()` method is called. It can also raise a ValidationError, also one that’s not associated with any specific field. If clean() finds no new errors, it should return a complete dictionary of data for the form, usually by doing return `self.cleaned_data`.
+4. If no validation errors were raised, the form’s `cleaned_data` dictionary will be fully populated with the valid data. If there were validation errors, however, `cleaned_data` will not exist, and a dictionary of errors (`self.errors`) will be filled with validation errors. Each field knows how to retrieve its own errors from this dictionary, which is why you can do things like `{{ form.username.errors }}` in a template.
+5. Finally, `is_valid()` returns either False if there were validation errors or True if there weren’t.
+
 ## Templates
 
 ### how they work
