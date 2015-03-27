@@ -59,6 +59,9 @@ use either of two common patterns when you’re doing such subclassing:
 - Concrete inheritance: This is what many people think of when they imagine how subclassing a model works. In this pattern, one model that subclasses another will create a new database table that links back to the original “parent” class’s table with a foreign key. Instances of the subclassed model will behave as if they have both the fields defined on the “parent” model and the fields defined on the subclassed model itself (under the hood, Django will pull information from both tables as needed).
 - Abstract inheritance: When you define a new model class and fill in its options using the inner class Meta declaration, you can add the attribute abstract=True. When you do this, Django will not create a table for that model, and you won’t be able to directly create or query for instances of that model. However, any subclasses of that model (as long as they don’t also declare abstract=True) will create their own tables, and will add columns for the fields from the abstract model as well.
 
+Using this technique—accepting `*args` and `**kwargs` and passing them on to the parent method—is a useful shorthand when the method you’re overriding accepts a lot of arguments,
+especially if a lot of them are optional.
+
 ## Functions & Methods
 
 the asterisk (`*`) is special Python syntax for taking a list (the result of calling split()) and turning in a set of arguments to a function
@@ -85,6 +88,20 @@ will never insert a NULL. For these field types, a blank value will be inserted 
 avoid a situation where there are potentially two different blank values for the field (either an empty string or
 a NULL) and to ensure that code that checks for blank values can be kept simple. Because of this, you should
 generally avoid specifying null=True on text-based field types.
+
+### related_name
+
+    class Bookmark(models.Model):
+        snippet = models.ForeignKey(Snippet)
+        user = models.ForeignKey(User, related_name='cab_bookmarks')
+        date = models.DateTimeField(editable=False)
+
+The fact that you’ve created a foreign key to User means that Django will add a new attribute to every User object, which you’ll be able to use to access each user’s bookmarks. By default, this attribute would be named bookmark_set based on the name of your Bookmark model.
+However, this can create a problem: If you ever use any other application with a bookmarking system, and if that application names its model Bookmark, you’ll get a naming conflict because the bookmark_set attribute of a User can’t simultaneously refer to two different models. The solution to this is the related_name argument to ForeignKey, which lets you manually specify the name of the new attribute on User, which you’ll use to access bookmarks. In this case, you’ll use the name cab_bookmarks. So once this model is installed and you have some bookmarks in your database, you’ll be able to run queries like this:
+
+    from django.contrib.auth.models import User
+    u = User.objects.get(pk=1)
+    bookmarks = u.cab_bookmarks.all()
 
 ### unique keys
 Most good weblog software
@@ -258,6 +275,14 @@ Now inside a view
             template_name='cab/top_authors.html',
             paginate_by=20)
 
+## Querystring
+
+### Delete objects
+
+        Bookmark.objects.filter(user__pk=request.user.id, snippet__pk=snippet.id).delete()
+
+Instead of querying to see if the user has a bookmark for this snippet and then deleting it manually (which incurs the overhead of two database queries), you simply use filter() to create a QuerySet of any bookmarks that match this user and this snippet. You then call the delete() method of that QuerySet. This issues only one query—a DELETE query, whose FROM clause limits it to the correct rows, if any exist.
+
 ## Forms
 
 ### required/optional
@@ -330,6 +355,73 @@ in different parts of the site, you can easily use CSS to highlight the correct 
 ### tags
 Due to the way Django’s template inheritance works, a custom tag or filter library loaded via the `{% load %}` tag will be available only in the block in which it was loaded. If you need to reuse the same tag library in a different block, you’ll need to load it again.
 
+#### parse
+
+If we want to create a templatetag to be used this way:
+
+    {% if_bookmarked user object %}
+        <form method="post" action="{% url cab_bookmark_delete object.id %}">
+        <p><input type="submit" value="Delete bookmark"></p>
+        </form>
+    {% else %}
+        <p><a href="{% url cab_bookmark_add object.id %}">Add bookmark</a></p>
+    {% endif_bookmarked %}
+
+we need to use the parser object passed to the compilation function
+
+    def do_if_bookmarked(parser, token):
+        bits = token.contents.split()
+        if len(bits) != 3:
+            raise template.TemplateSyntaxError("%s tag takes two arguments" % bits[0])
+
+So we search for all nodes that stays inside the True part (before the `else` tag or the `endif_bookmarked` tag)
+
+    nodelist_true = parser.parse(('else', 'endif_bookmarked'))
+
+The call to parser.parse() moves ahead in the template to just before the first item in the list you told it to look for. This means you now want to look at the next token and find out if it’s an {% else %}. If it is, you’ll need to do a bit more parsing
+
+    token = parser.next_token()
+        if token.contents == 'else':
+            nodelist_false = parser.parse(('endif_bookmarked',))
+            parser.delete_first_token()
+        else:
+            nodelist_false = template.NodeList()
+
+Finally, you return a Node class, passing the two arguments gathered from the tag and the two NodeList instances
+
+    return IfBookmarkedNode(bits[1], bits[2], nodelist_true, nodelist_false)
+
+Now the node class:
+
+    class IfBookmarkedNode(template.Node):
+        def __init__(self, user, snippet, nodelist_true, nodelist_false):
+        self.nodelist_true = nodelist_true
+        self.nodelist_false = nodelist_false
+
+right now the `user` and `snippet` variables are string!
+You need some way of saying that these are actually template variables that you need to resolve later. Fortunately, that’s easy enough to do: 
+
+    self.user = template.Variable(user) self.snippet = template.Variable(snippet)
+
+The Variable class in django.template handles the hard work for you. When given the template context to work with, it knows how to resolve the variable and gives you back the actual value it corresponds to. Now you can start to write the render() method:
+
+    def render(self, context):
+        user = self.user.resolve(context)
+        snippet = self.snippet.resolve(context)
+
+Each Variable instance has a method called `resolve()`, which handles the actual business of resolving the variable. If the variable turns out not to correspond to anything, it’ll even handle raising an exception `django.template.VariableDoesNotExist` automatically for you. Of course, you’ve seen that it’s usually a good idea for custom template tags to fail silently.
+You have two NodeList instances, and you want to render one or the other according to whether the user has bookmarked the snippet. Fortunately, that’s easy. Just as a Node must have a `render()` method that accepts the context and returns a string, so too must NodeList:
+
+    if Bookmark.objects.filter(user__pk=user.id, snippet__pk=snippet.id):
+        return self.nodelist_true.render(context)
+    else:
+        return self.nodelist_false.render(context)
+
+To register the tag:
+
+    register = template.Library()
+    register.tag('if_bookmarked', do_if_bookmarked)
+
 ### filters
 
 #### pluralize
@@ -343,6 +435,12 @@ Due to the way Django’s template inheritance works, a custom tag or filter lib
         <a href="{{ entry.get_absolute_url }}">{{ entry.title }}</a>,
         posted {{ entry.pub_date|timesince }} ago.
     </li>
+
+## Context Processors
+
+RequestContext gets its name from the fact that it makes use of functions called context processors. Each context processor is a function that receives a Django `HttpRequest` object as an argument and returns a dictionary of variables based on that `HttpRequest`. `RequestContext` then automatically adds those variables to the context, in addition to any variables explicitly passed to the context during the process of executing a view function.
+In normal use, RequestContext reads its list of context-processor functions from the setting TEMPLATE_CONTEXT_PROCESSORS. The default set happens to include a context processor that reads `request.user` to get the current user and adds it to the context as the variable `{{ user }}`.
+Django’s generic views by default uses `RequestContext`.
 
 ## Contrib
 
