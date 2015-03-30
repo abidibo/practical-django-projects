@@ -76,6 +76,17 @@ is equal to
     model_args = bits[1].split('.')
     model = get_model(model_args[0], model_args[1])
 
+## Settings
+
+How to deal with local and production settings? Simple: Just have your settings.py file keep all the production settings, and then at the end of the file:
+
+    try:
+        from local_settings import *
+    except ImportError:
+        pass
+
+Then add a `local_settings.py` file in the same directory where you override all the settings you need. In production this file won't exist, so will not be processed.
+
 ## Models
 
 ### Meta
@@ -283,6 +294,12 @@ Now inside a view
 
 Instead of querying to see if the user has a bookmark for this snippet and then deleting it manually (which incurs the overhead of two database queries), you simply use filter() to create a QuerySet of any bookmarks that match this user and this snippet. You then call the delete() method of that QuerySet. This issues only one query—a DELETE query, whose FROM clause limits it to the correct rows, if any exist.
 
+### aggregate
+Previously, you used the annotate method, because you needed to add an extra piece of information to the results returned by the query. But now you just want to directly return the aggregated value and nothing else, so you’ll use a different method called aggregate. If you have a Snippet object in a variable named snippet, and you want the sum of all the ratings attached to it, you can write the query like this: (the `Rating` model has a `Snippet` `ForeignKey` field)
+
+    from django.db.models import Sum
+        total_rating = snippet.rating_set.aggregate(Sum('rating'))
+
 ## Forms
 
 ### required/optional
@@ -461,3 +478,170 @@ This will apply Markdown to the comment’s contents, and will also enable Markd
 In other words, it’s a tuple, or list of tuples, where each tuple contains a name and an
 e-mail address. When these are filled in, two functions in `django.core.mail—mail_admins()`
 and `mail_managers()` can be used as a shortcut to send an e-mail to those people.
+
+## Develping multiple applications
+
+### Split off features in different applications
+
+When is it better to separate features in different applications?
+
+Think in terms of orthogonality. Generally, in software development, two features are orthogonal if a change to one doesn’t affect the other. User preferences, then, are orthogonal to user signups, because you could, for example, change the way the signup process works (say, by adding an explicit activation step or building in mea- sures to defeat spambots) without changing the way users configure their preferences. When features are clearly orthogonal to each other like this, they almost always belong in separate applications.
+
+Finally, reuse can be a good criterion for determining whether some particular feature deserves to be split out into its own application. If you can imagine a case where you’d want to use that feature, and just that feature, on another site, the odds are good that it ought to be in a separate application to make that reuse easier.
+
+### Flexible form handling
+
+The view
+
+    def contact_form(request, form_class=ContactForm):
+        if request.method == 'POST':
+            form = form_class(data=request.POST)
+            if form.is_valid():
+                form.save()
+                return HttpResponseRedirect("/contact/sent/")
+            else:
+                form = form_class()
+            return render_to_response('contact_form.html',
+                { 'form': form },
+                context_instance=RequestContext(request))
+
+The URL pattern
+
+    url(r'^inquiries/sales/$',
+        contact_form,
+        { 'form_class': SalesInquiryForm },
+        name='sales_inquiry_form'),
+
+### Flexible template handling
+
+View
+
+    def contact_form(request, form_class=ContactForm, template_name='contact_form.html'):
+        if request.method == 'POST':
+            form = form_class(data=request.POST)
+            if form.is_valid():
+                form.save()
+                return HttpResponseRedirect("/contact/sent/")
+            else:
+                form = form_class()
+            return render_to_response(template_name,
+                { 'form': form },
+                context_instance=RequestContext(request))
+
+The URL pattern
+
+    url(r'^inquiries/sales/$',
+        contact_form,
+        { 'form_class': SalesInquiryForm,
+        'template_name': 'sales_inquiry.html' },
+        name='sales_inquiry_form'),
+
+### Flexible Post-Form Processing
+
+Define a `success_url`
+
+    def contact_form(request, form_class=ContactForm,
+        template_name='contact_form.html',
+        success_url='/contact/sent/'):
+        ...
+
+### More
+
+I generally try to support at least the following arguments:
+
+- `form_class`, when I’m writing a view that handles a form
+- `success_url`, when I’m writing a view that redirects after successful processing (of a form, for example)
+- `template_name`, as in generic views
+- `extra_context`, also as in generic views
+
+Also, I always make sure to use RequestContext for template rendering. This enables both the standard set of context processors, which add things to the context like the identity of the currently logged-in user, as well as any custom context processors that have been added to the site’s settings.
+
+## Distributing django applications
+
+Sometimes you will have code that’s tightly coupled to a particular project. For example, it’s somewhat common to write a view that handles the home page of a site, and have that view handle requirements that are so site-specific that it wouldn’t make sense to reuse that view in other projects. If you’d like, you can place code like this in an application that’s directly inside the project directory, but keep in mind that for common cases like this, there’s no need for an application. Django doesn’t require that view functions be within an application module (Django’s own generic views aren’t, for example). So you can simply put project-specific views directly inside the project. You only need to create an application if you’re also defining models or custom template tags.
+
+### Python Packaging tools
+
+Because a Django application is just a collection of Python code, you should simply use standard Python packaging tools to distribute it. The Python standard library includes the module `distutils`, which provides the basic functionality you’ll need: creating packages, installing them, and registering them with the Python Package Index (if you want to distribute your application to the public).
+
+The primary way you’ll use distutils is by writing a script—conventionally called setup.py—that contains some information about your package. Then you’ll use that script to generate the package. In the simplest case, this is a three-step process:
+
+- In a temporary directory (not one on your Python import path), create an empty setup.py file and a copy of your application’s directory, containing its code.
+- Fill out the setup.py script with the appropriate information.
+- Run python setup.py sdist to generate the package; this creates a directory called dist that contains the package.
+
+The other common method of distributing Python packages uses a system called setuptools. setuptools has some similarities to distutils But setuptools adds a large number of features on top of the standard distutils, including ways to specify dependencies between packages and ways to automatically download and install packages and all their dependencies. You can learn more about setuptools online at http://peak.telecommunity.com/DevCenter/setuptools
+
+#### setup.py
+
+    from distutils.core import setup
+    setup(name="hello",
+        version="0.1",
+        description="A simple packaged Python application",
+        author="Your name here",
+        author_email="Your e-mail address here",
+        url="Your website URL here",
+        py_modules=["hello"],
+        download_url="URL to download this package here")
+
+Now you can run python setup.py sdist, which creates a dist directory containing a file named hello-0.1.tar.gz
+
+The installation process is simple: open up the package (the file is a standard compressed archive file that most operating systems can unpack), and it will create a directory called hello-0.1 containing a setup.py script. Running python setup.py install in that directory installs the package on the Python import path.
+
+To handle multiple modules or submodules, you simply list them in the py_modules argument. For example, if you have an application named foo, which contains a submodule named foo.templatetags, you’d use this argument to tell distutils to include them:
+
+    py_modules=["foo", "foo.templatetags"],
+
+Including LICENSE, README, etc.. files in a Python package is fairly easy. While the setup.py script specifies the Python modules to be packaged, you can list additional files like these in a file named MANIFEST.in (in the same directory as setup.py). The format of this file is extremely simple and often looks something like this:
+
+    include LICENSE.txt
+    include README.txt
+    include CHANGELOG.txt
+
+Each include statement goes on a separate line and names a file to be included in the package. For advanced use, such as packaging a directory of documentation files, you can use a recursive-include statement. For example, if documentation files reside in a directory called docs, you could use this statement to include them in the package:
+
+    recursive-include docs *
+
+## Documentation
+
+### Documentation Displayed Within Django
+
+This last point is particularly important, because Django can sift through your code for docstrings and use them to display useful documentation to users. The administrative interface usually contains a link labeled “Documentation” (in the upper right-hand corner of the main page), which takes the user to a page listing all of the documentation Django can produce (if the necessary Python documentation tools are available; see the next section for details).
+
+- A list of all the installed models, organized by the applications they belong to: Foreach model, Django shows a table listing the fields defined on the model and any custom methods, as well as the docstring of the model class.
+- A list of all the URL patterns and the views they map to: For each view, Django displays the docstring.
+- Lists of all available template tags and filters, both from Django’s own built-in set and from any custom tag libraries include
+
+### What to document
+
+For example, you don’t need to supply a docstring for the `get_absolute_url()` method of a model, because that’s a standard method to define on models, and you can trust that people reading your code will know why it’s there and what it’s doing. However, if you’re providing a custom `save()` method, you often should document it, because an explanation of any special behavior it provides will be useful to people reading your code.
+
+### Good practice
+
+- Model classes should include information about any custom managers attached to the model: However, they don’t need to include a list of fields in their docstrings, because that’s generated automatically.
+- Docstrings for view functions should always mention the template name that will be used: In addition, they should provide a list of variables that are made available to the template.
+- Docstrings for custom template tags should explain the syntax and arguments the tags expect: Ideally, they should also give at least one example of how the tag works.
+
+If you’d like, you can use REstructured text syntax in your docstrings to get nicely formatted documentation.
+
+### Django specific
+
+    def latest_entries(request):
+        """
+        View of the latest 15 entries published. This is similar to
+        the :view:'django.views.generic.date_based.archive_index'
+        generic view.
+        **Template:**'
+        ''coltrane/entry_archive.html''
+        **Context:**
+        ''latest''
+        A list of :model'coltrane.Entry' objects.
+        """
+        return render_to_response('coltrane/entry_archive.html',
+            { 'latest': Entry.live.all()[:15] })
+
+In addition to the :view: and :model: shortcuts shown in the previous example, three others are available:
+
+- :tag:: This should be followed by the name of a template tag. It links to the tag’s documentation.
+- :filter:: This should be followed by the name of a template filter. It links to the filter’s documentation.
+- :template:: This should be followed by a template name. It links to a page that either shows locations in your project’s `TEMPLATE_DIRS` setting where that template can be found, or shows nothing if the template can’t be found.
